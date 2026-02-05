@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	claudeModel      = "claude-sonnet-4-20250514"
+	claudeModel      = "claude-sonnet-4@20250514"
 	anthropicVersion = "vertex-2023-10-16"
 )
 
@@ -55,8 +55,8 @@ type claudeRequest struct {
 
 // claudeMessage represents a message in the conversation
 type claudeMessage struct {
-	Role    string           `json:"role"`
-	Content []claudeContent  `json:"content"`
+	Role    string          `json:"role"`
+	Content []claudeContent `json:"content"`
 }
 
 // claudeContent represents content within a message
