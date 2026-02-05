@@ -73,3 +73,21 @@ You were not supposed to create any new file until I told you to start implement
 
 ### Prompt 24
 Review the plan again. Are we ready to start implementing?
+
+### Prompt 25
+Start implementing the plan. Raise issues early. Ask for guidance in case of doubt. Test the code with this repo: https://github.com/RedHatInsights/notifications-backend. I added a GitHub token in the .env file which you can use to perform real requests to the GitHub API. Do not write Go tests yet. We'll take care of that later.
+
+### Prompt 26
+We'll address that later. Make this optional in the plan, mention that we'll use GraphQL and why.
+
+### Prompt 27
+Create the README.md and split the code into modules
+
+### Prompt 28
+It seems all Sourcery comments come with one thumb up and one thumb down by default. Research this and confirm it. If confirmed, do not count these defaults reactions. Also look for something similar with Coderabbit.
+
+### Prompt 29
+Explain why github.com/google/go-querystring is needed
+
+### Prompt 30
+Did you implement something to deal with paginated comments from a PR? The GitHub API limits how many comments can be fetched with a single API call. We might need to iterate over pages for bigger PRs.

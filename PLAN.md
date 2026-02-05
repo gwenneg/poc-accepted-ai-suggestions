@@ -42,12 +42,11 @@ A CLI tool written in GoLang that analyzes GitHub repositories to measure the ef
 /
 ├── main.go                 # CLI entry point
 ├── go.mod
-├── coderabbit/             # CodeRabbit module
-│   ├── go.mod
+├── coderabbit/             # CodeRabbit package
 │   └── coderabbit.go
-├── sourcery/               # Sourcery.ai module
-│   ├── go.mod
+├── sourcery/               # Sourcery.ai package
 │   └── sourcery.go
+├── .env.example
 └── README.md
 ```
 
@@ -68,9 +67,15 @@ A CLI tool written in GoLang that analyzes GitHub repositories to measure the ef
 
 ## GitHub API Strategy
 
+**REST API (current implementation):**
 1. `GET /repos/{owner}/{repo}/pulls` - List PRs from past month
 2. `GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews` - Check if bot is in reviewers
 3. `GET /repos/{owner}/{repo}/pulls/{pull_number}/comments` - Get comments (only for PRs with AI reviews)
+
+**GraphQL API (future - for bot-resolved detection):**
+- REST API does not expose `resolved` or `resolvedBy` fields for review comments
+- GraphQL API provides `reviewThreads` with `isResolved` and `resolvedBy` fields
+- Will be added later to detect threads resolved by the bot itself
 
 ## Tool-Specific Details
 
@@ -87,6 +92,8 @@ A CLI tool written in GoLang that analyzes GitHub repositories to measure the ef
 **Acceptance detection:**
 - Thread resolved **by the bot itself** = AI detected issue was fixed
 - 👍/👎 reactions on comments
+
+**Note:** Sourcery adds 1 👍 and 1 👎 by default to each review comment (for user feedback). These defaults are subtracted when counting reactions.
 
 **Metrics API:** None available
 
@@ -105,7 +112,8 @@ A CLI tool written in GoLang that analyzes GitHub repositories to measure the ef
 - [ ] Handle pagination
 
 ### Phase 3: Analysis
-- [ ] Implement acceptance detection (bot-resolved threads + reactions)
+- [ ] Implement reactions detection (👍/👎)
+- [ ] (Future) Implement bot-resolved threads detection via GraphQL API
 
 ### Phase 4: Output
 - [ ] Generate JSON array output
@@ -120,7 +128,7 @@ A CLI tool written in GoLang that analyzes GitHub repositories to measure the ef
 | Go version | 1.24.0 |
 | GitHub API library | `github.com/google/go-github/v80` |
 | Initial scope | CodeRabbit + Sourcery.ai only |
-| Project structure | Separate Go module per tool |
+| Project structure | Separate Go package per tool |
 | Time window | Past month (hardcoded, configurable later) |
 | PR state filter | All PRs (open, closed, merged) |
 | Output format | JSON array, tool-specific structures |
