@@ -46,6 +46,8 @@ A CLI tool written in GoLang that analyzes GitHub repositories to measure the ef
 │   └── coderabbit.go
 ├── sourcery/               # Sourcery.ai package
 │   └── sourcery.go
+├── llm/                    # Claude LLM client
+│   └── claude.go
 ├── .env.example
 └── README.md
 ```
@@ -97,6 +99,41 @@ A CLI tool written in GoLang that analyzes GitHub repositories to measure the ef
 
 **Metrics API:** None available
 
+## LLM Analysis Feature (Claude)
+
+For each discussion thread initiated by an AI review tool, submit all comments to Claude for analysis.
+
+**Input:** All comments from a review thread (bot suggestion + user replies)
+
+**Condition:** Only submit threads that have at least one user comment (skip threads with only the bot's initial suggestion)
+
+**Output:** JSON structure with:
+```json
+{
+  "score": 75,
+  "summary": "The developer acknowledged the suggestion was valid but noted it would require refactoring other parts of the codebase. They planned to address it in a follow-up PR."
+}
+```
+
+**Fields:**
+- `score` (0-100): How useful the AI suggestion was based on user discussion
+  - 0-25: Rejected/unhelpful suggestion
+  - 26-50: Partially useful but not applied
+  - 51-75: Useful and likely applied
+  - 76-100: Very useful and clearly applied
+- `summary`: Brief summary of user discussions, reflecting their opinion and intent
+
+**Implementation approach:**
+- Simple HTTP client to Claude API (inspired by [release-confidence-score](https://github.com/RedHatInsights/release-confidence-score/tree/main/internal/llm))
+- Single `llm/` package with Claude client only
+- Environment variables: `MODEL_API` (base URL), `MODEL_USER_KEY` (Bearer token)
+- Model ID: hardcoded (Claude Sonnet)
+
+**Cost optimization:**
+- Only include message body from each comment (no usernames, timestamps, or metadata)
+- Skip threads without user comments
+- Keep prompts minimal and focused
+
 ## Implementation Steps
 
 ### Phase 1: Foundation
@@ -115,7 +152,14 @@ A CLI tool written in GoLang that analyzes GitHub repositories to measure the ef
 - [ ] Implement reactions detection (👍/👎)
 - [ ] (Future) Implement bot-resolved threads detection via GraphQL API
 
-### Phase 4: Output
+### Phase 4: LLM Analysis
+- [ ] Implement Claude API client in `llm/claude.go`
+- [ ] Fetch full thread comments for each bot-initiated discussion
+- [ ] Submit thread comments to Claude for analysis
+- [ ] Parse Claude response (score + summary)
+- [ ] Include LLM analysis in output
+
+### Phase 5: Output
 - [ ] Generate JSON array output
 - [ ] Create README.md (usage-focused)
 
@@ -124,9 +168,12 @@ A CLI tool written in GoLang that analyzes GitHub repositories to measure the ef
 | Decision | Value |
 |----------|-------|
 | CLI tool name | `ai-review-analyzer` |
-| Authentication | `GITHUB_TOKEN` env var |
+| GitHub authentication | `GITHUB_TOKEN` env var |
+| LLM configuration | `MODEL_API` (base URL) + `MODEL_USER_KEY` (Bearer token) |
 | Go version | 1.24.0 |
 | GitHub API library | `github.com/google/go-github/v80` |
+| LLM provider | Claude only (via Anthropic API) |
+| LLM model | Claude Sonnet |
 | Initial scope | CodeRabbit + Sourcery.ai only |
 | Project structure | Separate Go package per tool |
 | Time window | Past month (hardcoded, configurable later) |

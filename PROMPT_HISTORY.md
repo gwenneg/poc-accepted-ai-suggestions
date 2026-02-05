@@ -91,3 +91,33 @@ Explain why github.com/google/go-querystring is needed
 
 ### Prompt 30
 Did you implement something to deal with paginated comments from a PR? The GitHub API limits how many comments can be fetched with a single API call. We might need to iterate over pages for bigger PRs.
+
+### Prompt 31
+Let's introduce a new feature in the plan: submitting for analysis to an LLM all comments from a GitHub discussion that was initiated by an AI-assisted review tool suggestion. We'll ask the LLM to analyze these comments and return a JSON data structure with two fields: a score (from 0 to 100) that should reflect how useful the AI suggestion was, and a summary which should summarize the user discussions. The goal is to reflect the users opinion and intent in the summary. We'll do that with Claude. Looks at how https://github.com/RedHatInsights/release-confidence-score/tree/main/internal/llm is implemented for inspiration. In this project, we'll implement the new feature in the simplest possible way. Do not over-engineer this. We will only use Claude. Do not plan for extra LLMS for now.
+
+### Prompt 32
+If a thread doesn't have any user comments, it should not be submitted for analysis
+
+### Prompt 33
+Make sure we only include useful information into the user prompt sent to the LLM. For instance, there's no need to include usernames. For the initial implementation, only the message from each comment should be enough. This feature should keep the cost as low as possible, so consumed tokens have to remain low.
+
+### Prompt 34
+You will need to add the new required env vars to .env.example (with comments).
+
+### Prompt 35
+Start implementing this.
+
+### Prompt 36
+I don't want to send requests to the Anthropic API. Look at the repo I shared for inspiration. I want the same approach here: a configurable model API URL and user key. The model ID can be hardcoded.
+
+### Prompt 37
+Is the new code similar to https://github.com/RedHatInsights/release-confidence-score/blob/main/internal/llm/providers/claude.go?
+
+### Prompt 38
+I want separate system and user prompt. Create a markdown file in this project for the system prompt. The user prompt can be created from the code.
+
+### Prompt 39
+Let's update the JSON data structure returned while executing this project. I want details about the LLM analysis included. Keep returning the current values which aggregate all metrics fetched or built from multiple PRs. Also include a new "details" field at the top level. It should be an array with details about each PR (same metrics than aggregated) and also contain the LLM analysis result.
+
+### Prompt 40
+Did you include an average LLM score to the aggregated metrics section? If not, do it.

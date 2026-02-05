@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"ai-review-analyzer/coderabbit"
+	"ai-review-analyzer/llm"
 	"ai-review-analyzer/sourcery"
 
 	"github.com/google/go-github/v80/github"
@@ -22,7 +23,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Usage: %s <github-repo-url>\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Analyzes AI-assisted code review tools usage in a GitHub repository.\n\n")
 		fmt.Fprintf(os.Stderr, "Environment variables:\n")
-		fmt.Fprintf(os.Stderr, "  GITHUB_TOKEN  GitHub Personal Access Token (required)\n\n")
+		fmt.Fprintf(os.Stderr, "  GITHUB_TOKEN     GitHub Personal Access Token (required)\n")
+		fmt.Fprintf(os.Stderr, "  MODEL_API        Base URL for Claude API (required)\n")
+		fmt.Fprintf(os.Stderr, "  MODEL_USER_KEY   Bearer token for Claude API (required)\n\n")
 		fmt.Fprintf(os.Stderr, "Example:\n")
 		fmt.Fprintf(os.Stderr, "  %s https://github.com/owner/repo\n", os.Args[0])
 	}
@@ -45,9 +48,20 @@ func main() {
 		log.Fatal("GITHUB_TOKEN environment variable is required")
 	}
 
+	modelAPI := os.Getenv("MODEL_API")
+	if modelAPI == "" {
+		log.Fatal("MODEL_API environment variable is required")
+	}
+
+	modelUserKey := os.Getenv("MODEL_USER_KEY")
+	if modelUserKey == "" {
+		log.Fatal("MODEL_USER_KEY environment variable is required")
+	}
+
 	log.Printf("Analyzing repository: %s/%s", owner, repo)
 
 	client := github.NewClient(nil).WithAuthToken(token)
+	llmClient := llm.NewClient(modelAPI, modelUserKey)
 	ctx := context.Background()
 
 	// Calculate date range (past month)
@@ -55,7 +69,7 @@ func main() {
 	log.Printf("Fetching PRs since: %s", since.Format("2006-01-02"))
 
 	// Fetch and analyze PRs
-	results, err := analyzePRs(ctx, client, owner, repo, since)
+	results, err := analyzePRs(ctx, client, llmClient, owner, repo, since)
 	if err != nil {
 		log.Fatalf("Failed to analyze PRs: %v", err)
 	}
@@ -96,10 +110,10 @@ func parseGitHubURL(rawURL string) (owner, repo string, err error) {
 }
 
 // analyzePRs fetches PRs and analyzes AI review tool comments
-func analyzePRs(ctx context.Context, client *github.Client, owner, repo string, since time.Time) ([]any, error) {
+func analyzePRs(ctx context.Context, client *github.Client, llmClient *llm.Client, owner, repo string, since time.Time) ([]any, error) {
 	// Initialize analyzers
-	crAnalyzer := coderabbit.NewAnalyzer(client, owner, repo)
-	srcAnalyzer := sourcery.NewAnalyzer(client, owner, repo)
+	crAnalyzer := coderabbit.NewAnalyzer(client, llmClient, owner, repo)
+	srcAnalyzer := sourcery.NewAnalyzer(client, llmClient, owner, repo)
 
 	// Fetch all PRs (all states) with pagination
 	opts := &github.PullRequestListOptions{
@@ -154,6 +168,9 @@ func analyzePRs(ctx context.Context, client *github.Client, owner, repo string, 
 				if err := crAnalyzer.AnalyzeIssueComments(ctx, prNum); err != nil {
 					log.Printf("Warning: failed to analyze CodeRabbit issue comments for PR #%d: %v", prNum, err)
 				}
+				if err := crAnalyzer.AnalyzeThreadsWithLLM(ctx, prNum); err != nil {
+					log.Printf("Warning: failed to analyze CodeRabbit threads with LLM for PR #%d: %v", prNum, err)
+				}
 			}
 
 			// Analyze Sourcery comments
@@ -164,6 +181,9 @@ func analyzePRs(ctx context.Context, client *github.Client, owner, repo string, 
 				}
 				if err := srcAnalyzer.AnalyzeIssueComments(ctx, prNum); err != nil {
 					log.Printf("Warning: failed to analyze Sourcery issue comments for PR #%d: %v", prNum, err)
+				}
+				if err := srcAnalyzer.AnalyzeThreadsWithLLM(ctx, prNum); err != nil {
+					log.Printf("Warning: failed to analyze Sourcery threads with LLM for PR #%d: %v", prNum, err)
 				}
 			}
 		}
