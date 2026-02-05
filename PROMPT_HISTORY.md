@@ -121,3 +121,6 @@ Let's update the JSON data structure returned while executing this project. I wa
 
 ### Prompt 40
 Did you include an average LLM score to the aggregated metrics section? If not, do it.
+
+### Prompt 41
+Update README.me with the latest changes. Remember it should only be focused on running the CLI.
