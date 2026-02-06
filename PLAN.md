@@ -2,36 +2,44 @@
 
 ## Overview
 
-A CLI tool written in GoLang that analyzes GitHub repositories to measure the effectiveness of AI-assisted code review tools. It detects comments from CodeRabbit and Sourcery.ai, then determines whether their suggestions were accepted or rejected by developers.
+A CLI tool written in Go that analyzes GitHub repositories to measure the effectiveness of AI-assisted code review tools (CodeRabbit, Sourcery.ai). It detects bot comments and determines whether suggestions were accepted or rejected by developers.
 
-## Requirements
+## Input/Output
 
-### Input
-- GitHub repository URL (e.g., `https://github.com/owner/repo`)
+**Input:** `owner/repo` (e.g., `RedHatInsights/notifications-backend`)
 
-### Output
-- JSON array where each item represents one AI review tool's analysis
-- Each tool has its own data structure (not unified across tools)
-- Example:
+**Output:** JSON array with analysis per AI tool:
 ```json
 [
   {
-    "tool": "coderabbit",
+    "ai_review_tool": "coderabbit",
     "bot_username": "coderabbitai[bot]",
-    "prs_reviewed": 5,
-    "total_comments": 23,
-    "bot_resolved_comments": 12,
+    "total_prs": 5,
+    "ai_suggestion_threads": 23,
+    "accepted_suggestions": 8,
+    "auto_resolved_by_user": 10,
+    "rejected_comments": 5,
+    "critical_bugs_fixed": 2,
     "thumbs_up": 8,
-    "thumbs_down": 2
-  },
-  {
-    "tool": "sourcery",
-    "bot_username": "sourcery-ai[bot]",
-    "prs_reviewed": 3,
-    "total_comments": 12,
-    "bot_resolved_comments": 6,
-    "thumbs_up": 5,
-    "thumbs_down": 1
+    "thumbs_down": 2,
+    "avg_developer_feedback_score": 7,
+    "prs": [
+      {
+        "url": "https://github.com/owner/repo/pull/101",
+        "author": "dev_user",
+        "metrics": {
+          "ai_suggestion_threads": 12,
+          "accepted_suggestions": 4,
+          "auto_resolved_by_user": 6,
+          "rejected_comments": 2,
+          "critical_bugs_fixed": 1,
+          "avg_developer_feedback_score": 7
+        },
+        "developer_feedback_analyses": [
+          {"developer_feedback_score": 7, "summary": "Developer accepted the suggestion..."}
+        ]
+      }
+    ]
   }
 ]
 ```
@@ -39,150 +47,68 @@ A CLI tool written in GoLang that analyzes GitHub repositories to measure the ef
 ## Project Structure
 
 ```
-/
-├── main.go                 # CLI entry point
-├── go.mod
-├── coderabbit/             # CodeRabbit package
-│   └── coderabbit.go
-├── sourcery/               # Sourcery.ai package
-│   └── sourcery.go
-├── llm/                    # Claude LLM client
-│   └── claude.go
-├── .env.example
+├── main.go              # CLI entry point
+├── github/              # REST API client (PRs, reviews, commits)
+├── ghgql/               # GraphQL client (review threads)
+├── coderabbit/          # CodeRabbit analyzer
+├── sourcery/            # Sourcery.ai analyzer
+├── llm/                 # Claude API client + system prompt
 └── README.md
 ```
 
-## AI Review Tools
+## Supported AI Tools
 
-| Tool | Bot Username | Status |
-|------|--------------|--------|
-| CodeRabbit | `coderabbitai[bot]` | **Phase 1** |
-| Sourcery.ai | `sourcery-ai[bot]` | **Phase 1** |
-| GitHub Copilot | `copilot[bot]` | Future |
-| Codium/Qodo | `qodo-merge-pro[bot]` | Future |
-| Ellipsis | `ellipsis-dev[bot]` | Future |
-| Bito AI | `bito-ai[bot]` | Future |
-| Sweep AI | `sweep-ai[bot]` | Future |
-| What The Diff | `whatthediff[bot]` | Future |
-
-*Bot usernames need verification against actual PRs*
+| Tool | Bot Username |
+|------|--------------|
+| CodeRabbit | `coderabbitai[bot]` |
+| Sourcery.ai | `sourcery-ai[bot]` |
 
 ## GitHub API Strategy
 
-**REST API (current implementation):**
-1. `GET /repos/{owner}/{repo}/pulls` - List PRs from past month
-2. `GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews` - Check if bot is in reviewers
-3. `GET /repos/{owner}/{repo}/pulls/{pull_number}/comments` - Get comments (only for PRs with AI reviews)
+**REST API** (`go-github/v80`): PRs, reviews, commits - with full pagination
 
-**GraphQL API (future - for bot-resolved detection):**
-- REST API does not expose `resolved` or `resolvedBy` fields for review comments
-- GraphQL API provides `reviewThreads` with `isResolved` and `resolvedBy` fields
-- Will be added later to detect threads resolved by the bot itself
+**GraphQL API** (`githubv4`): Review threads per PR - for `isResolved`, `isOutdated`, `resolvedBy`, reactions
 
-## Tool-Specific Details
+Why hybrid: REST handles pagination properly; GraphQL provides thread resolution data not available via REST. Per-PR queries avoid the 500k node limit.
 
-### CodeRabbit
+## Metrics
 
-**Acceptance detection:**
-- Thread resolved **by the bot itself** = AI detected issue was fixed
-- 👍/👎 reactions on comments
+| Metric | Detection Method |
+|--------|------------------|
+| `ai_suggestion_threads` | Count bot-authored review threads |
+| `accepted_suggestions` | Commits with "Apply suggestion from [bot]" message |
+| `auto_resolved_by_user` | `meaningful - accepted` |
+| `rejected_comments` | Unresolved bot threads on merged PRs |
+| `critical_bugs_fixed` | Resolved threads with 🔴 emoji |
+| `thumbs_up/down` | Reaction counts (Sourcery: subtract 1 default each) |
 
-**Future enhancement:** CodeRabbit Metrics API (Enterprise plan only) at `https://api.coderabbit.ai/v1/metrics/reviews`
+**Thread resolution logic:**
+- Meaningful: `isResolved && !isOutdated`
+- False positive: `isResolved && isOutdated`
 
-### Sourcery.ai
+## LLM Analysis (Claude)
 
-**Acceptance detection:**
-- Thread resolved **by the bot itself** = AI detected issue was fixed
-- 👍/👎 reactions on comments
+Threads with user replies are sent to Claude for scoring.
 
-**Note:** Sourcery adds 1 👍 and 1 👎 by default to each review comment (for user feedback). These defaults are subtracted when counting reactions.
-
-**Metrics API:** None available
-
-## LLM Analysis Feature (Claude)
-
-For each discussion thread initiated by an AI review tool, submit all comments to Claude for analysis.
-
-**Input:** All comments from a review thread (bot suggestion + user replies)
-
-**Condition:** Only submit threads that have at least one user comment (skip threads with only the bot's initial suggestion)
-
-**Output:** JSON structure with:
+**Output:**
 ```json
-{
-  "score": 75,
-  "summary": "The developer acknowledged the suggestion was valid but noted it would require refactoring other parts of the codebase. They planned to address it in a follow-up PR."
-}
+{"developer_feedback_score": 7, "summary": "..."}
 ```
 
-**Fields:**
-- `score` (0-100): How useful the AI suggestion was based on user discussion
-  - 0-25: Rejected/unhelpful suggestion
-  - 26-50: Partially useful but not applied
-  - 51-75: Useful and likely applied
-  - 76-100: Very useful and clearly applied
-- `summary`: Brief summary of user discussions, reflecting their opinion and intent
+**Score (0-10):** 0-2 rejected, 3-5 partial, 6-8 applied, 9-10 clearly applied
 
-**Implementation approach:**
-- Simple HTTP client to Claude API (inspired by [release-confidence-score](https://github.com/RedHatInsights/release-confidence-score/tree/main/internal/llm))
-- Single `llm/` package with Claude client only
-- Environment variables: `MODEL_API` (base URL), `MODEL_USER_KEY` (Bearer token)
-- Model ID: hardcoded (Claude Sonnet)
+**Cost optimization:** Only message bodies, skip threads without replies.
 
-**Cost optimization:**
-- Only include message body from each comment (no usernames, timestamps, or metadata)
-- Skip threads without user comments
-- Keep prompts minimal and focused
+## Configuration
 
-## Implementation Steps
+| Variable | Description |
+|----------|-------------|
+| `GITHUB_TOKEN` | GitHub PAT |
+| `MODEL_API` | Claude API base URL |
+| `MODEL_USER_KEY` | Claude API bearer token |
 
-### Phase 1: Foundation
-- [ ] Initialize Go module (go 1.24.0)
-- [ ] Set up CLI with standard `flag` package
-- [ ] Implement GitHub URL parser
-- [ ] Set up GitHub API client with go-github/v80
+## Scope
 
-### Phase 2: Data Fetching
-- [ ] Fetch PRs from past month
-- [ ] Filter PRs by checking reviews for bot usernames
-- [ ] Fetch comments for matching PRs
-- [ ] Handle pagination
-
-### Phase 3: Analysis
-- [ ] Implement reactions detection (👍/👎)
-- [ ] (Future) Implement bot-resolved threads detection via GraphQL API
-
-### Phase 4: LLM Analysis
-- [ ] Implement Claude API client in `llm/claude.go`
-- [ ] Fetch full thread comments for each bot-initiated discussion
-- [ ] Submit thread comments to Claude for analysis
-- [ ] Parse Claude response (score + summary)
-- [ ] Include LLM analysis in output
-
-### Phase 5: Output
-- [ ] Generate JSON array output
-- [ ] Create README.md (usage-focused)
-
-## Decisions
-
-| Decision | Value |
-|----------|-------|
-| CLI tool name | `ai-review-analyzer` |
-| GitHub authentication | `GITHUB_TOKEN` env var |
-| LLM configuration | `MODEL_API` (base URL) + `MODEL_USER_KEY` (Bearer token) |
-| Go version | 1.24.0 |
-| GitHub API library | `github.com/google/go-github/v80` |
-| LLM provider | Claude only (via Anthropic API) |
-| LLM model | Claude Sonnet |
-| Initial scope | CodeRabbit + Sourcery.ai only |
-| Project structure | Separate Go package per tool |
-| Time window | Past month (hardcoded, configurable later) |
-| PR state filter | All PRs (open, closed, merged) |
-| Output format | JSON array, tool-specific structures |
-| Error handling | Log and skip PR, report partial results |
-| Logging | Simple progress logs to stderr |
-
-## Notes
-
-- Focus on PoC quality over production readiness
-- Handle GitHub API rate limits gracefully (5000 requests/hour authenticated)
+- PRs from past month (hardcoded)
+- All PR states (open, closed, merged)
+- Log errors, skip PR, report partial results

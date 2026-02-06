@@ -22,8 +22,8 @@ var systemPrompt string
 
 // ThreadAnalysis represents the LLM analysis result for a discussion thread
 type ThreadAnalysis struct {
-	Score   int    `json:"score"`
-	Summary string `json:"summary"`
+	DeveloperFeedbackScore int    `json:"developer_feedback_score"`
+	Summary                string `json:"summary"`
 }
 
 // Client handles communication with the Claude API
@@ -172,11 +172,11 @@ func parseAnalysis(text string) (*ThreadAnalysis, error) {
 	}
 
 	// Clamp score to valid range
-	if analysis.Score < 0 {
-		analysis.Score = 0
+	if analysis.DeveloperFeedbackScore < 0 {
+		analysis.DeveloperFeedbackScore = 0
 	}
-	if analysis.Score > 100 {
-		analysis.Score = 100
+	if analysis.DeveloperFeedbackScore > 10 {
+		analysis.DeveloperFeedbackScore = 10
 	}
 
 	return &analysis, nil

@@ -6,28 +6,27 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"strings"
 	"time"
 
 	"ai-review-analyzer/coderabbit"
+	"ai-review-analyzer/ghgql"
+	"ai-review-analyzer/github"
 	"ai-review-analyzer/llm"
 	"ai-review-analyzer/sourcery"
-
-	"github.com/google/go-github/v80/github"
 )
 
 func main() {
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s <github-repo-url>\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s <owner/repo>\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Analyzes AI-assisted code review tools usage in a GitHub repository.\n\n")
 		fmt.Fprintf(os.Stderr, "Environment variables:\n")
 		fmt.Fprintf(os.Stderr, "  GITHUB_TOKEN     GitHub Personal Access Token (required)\n")
 		fmt.Fprintf(os.Stderr, "  MODEL_API        Base URL for Claude API (required)\n")
 		fmt.Fprintf(os.Stderr, "  MODEL_USER_KEY   Bearer token for Claude API (required)\n\n")
 		fmt.Fprintf(os.Stderr, "Example:\n")
-		fmt.Fprintf(os.Stderr, "  %s https://github.com/owner/repo\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s owner/repo\n", os.Args[0])
 	}
 
 	flag.Parse()
@@ -37,10 +36,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	repoURL := flag.Arg(0)
-	owner, repo, err := parseGitHubURL(repoURL)
+	repoArg := flag.Arg(0)
+	owner, repo, err := parseRepoArg(repoArg)
 	if err != nil {
-		log.Fatalf("Invalid GitHub URL: %v", err)
+		log.Fatalf("Invalid repository: %v", err)
 	}
 
 	token := os.Getenv("GITHUB_TOKEN")
@@ -60,7 +59,9 @@ func main() {
 
 	log.Printf("Analyzing repository: %s/%s", owner, repo)
 
-	client := github.NewClient(nil).WithAuthToken(token)
+	// Create clients
+	restClient := github.NewClient(token)
+	gqlClient := ghgql.NewClient(token)
 	llmClient := llm.NewClient(modelAPI, modelUserKey)
 	ctx := context.Background()
 
@@ -68,11 +69,82 @@ func main() {
 	since := time.Now().AddDate(0, -1, 0)
 	log.Printf("Fetching PRs since: %s", since.Format("2006-01-02"))
 
-	// Fetch and analyze PRs
-	results, err := analyzePRs(ctx, client, llmClient, owner, repo, since)
+	// Fetch all PRs via REST API (with pagination)
+	prs, err := restClient.FetchPRs(ctx, owner, repo, since)
 	if err != nil {
-		log.Fatalf("Failed to analyze PRs: %v", err)
+		log.Fatalf("Failed to fetch PRs: %v", err)
 	}
+	log.Printf("Fetched %d PRs", len(prs))
+
+	// Initialize analyzers
+	crAnalyzer := coderabbit.NewAnalyzer(llmClient)
+	srcAnalyzer := sourcery.NewAnalyzer(llmClient)
+
+	// Analyze each PR
+	for _, pr := range prs {
+		// Fetch reviewers via REST API (with pagination)
+		reviewers, err := restClient.FetchReviewers(ctx, owner, repo, pr.Number)
+		if err != nil {
+			log.Printf("Warning: failed to fetch reviewers for PR #%d: %v", pr.Number, err)
+			continue
+		}
+
+		hasCodeRabbit := containsBot(reviewers, coderabbit.BotUsername)
+		hasSourcery := containsBot(reviewers, sourcery.BotUsername)
+
+		if !hasCodeRabbit && !hasSourcery {
+			continue
+		}
+
+		log.Printf("PR #%d has AI reviews (CodeRabbit: %v, Sourcery: %v)", pr.Number, hasCodeRabbit, hasSourcery)
+
+		// Fetch commits via REST API (with pagination)
+		commitMsgs, err := restClient.FetchCommitMessages(ctx, owner, repo, pr.Number)
+		if err != nil {
+			log.Printf("Warning: failed to fetch commits for PR #%d: %v", pr.Number, err)
+			commitMsgs = nil
+		}
+
+		// Fetch review threads via GraphQL (with pagination)
+		threads, err := gqlClient.FetchReviewThreads(ctx, owner, repo, pr.Number)
+		if err != nil {
+			log.Printf("Warning: failed to fetch threads for PR #%d: %v", pr.Number, err)
+			threads = nil
+		}
+
+		// Build combined PR data for analyzers
+		prData := ghgql.PRData{
+			Number:     pr.Number,
+			URL:        pr.URL,
+			Author:     pr.Author,
+			IsMerged:   pr.IsMerged,
+			CommitMsgs: commitMsgs,
+			Threads:    threads,
+		}
+
+		if hasCodeRabbit {
+			crAnalyzer.AnalyzePR(ctx, prData)
+		}
+
+		if hasSourcery {
+			srcAnalyzer.AnalyzePR(ctx, prData)
+		}
+	}
+
+	// Build results array
+	var results []any
+	if crAnalyzer.HasReviews() {
+		results = append(results, crAnalyzer.GetResult())
+	}
+	if srcAnalyzer.HasReviews() {
+		results = append(results, srcAnalyzer.GetResult())
+	}
+
+	if results == nil {
+		results = []any{}
+	}
+
+	log.Printf("Analysis complete")
 
 	// Output JSON to stdout
 	output, err := json.MarshalIndent(results, "", "  ")
@@ -82,134 +154,31 @@ func main() {
 	fmt.Println(string(output))
 }
 
-// parseGitHubURL extracts owner and repo from a GitHub URL
-func parseGitHubURL(rawURL string) (owner, repo string, err error) {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to parse URL: %w", err)
+
+// containsBot checks if the bot username is in the reviewers list
+func containsBot(reviewers []string, botUsername string) bool {
+	// REST API returns full username with [bot] suffix
+	for _, r := range reviewers {
+		if r == botUsername {
+			return true
+		}
+	}
+	return false
+}
+
+// parseRepoArg extracts owner and repo from an "owner/repo" argument
+func parseRepoArg(arg string) (owner, repo string, err error) {
+	parts := strings.Split(arg, "/")
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("expected format: owner/repo")
 	}
 
-	if parsed.Host != "github.com" && parsed.Host != "www.github.com" {
-		return "", "", fmt.Errorf("not a GitHub URL: %s", parsed.Host)
-	}
-
-	// Path should be /owner/repo or /owner/repo/...
-	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
-	if len(parts) < 2 {
-		return "", "", fmt.Errorf("invalid repository path: %s", parsed.Path)
-	}
-
-	owner = parts[0]
-	repo = strings.TrimSuffix(parts[1], ".git")
+	owner = strings.TrimSpace(parts[0])
+	repo = strings.TrimSpace(parts[1])
 
 	if owner == "" || repo == "" {
 		return "", "", fmt.Errorf("owner or repo is empty")
 	}
 
 	return owner, repo, nil
-}
-
-// analyzePRs fetches PRs and analyzes AI review tool comments
-func analyzePRs(ctx context.Context, client *github.Client, llmClient *llm.Client, owner, repo string, since time.Time) ([]any, error) {
-	// Initialize analyzers
-	crAnalyzer := coderabbit.NewAnalyzer(client, llmClient, owner, repo)
-	srcAnalyzer := sourcery.NewAnalyzer(client, llmClient, owner, repo)
-
-	// Fetch all PRs (all states) with pagination
-	opts := &github.PullRequestListOptions{
-		State:     "all",
-		Sort:      "updated",
-		Direction: "desc",
-		ListOptions: github.ListOptions{
-			PerPage: 100,
-		},
-	}
-
-	prCount := 0
-	for {
-		prs, resp, err := client.PullRequests.List(ctx, owner, repo, opts)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list PRs: %w", err)
-		}
-
-		for _, pr := range prs {
-			// Skip PRs older than our time window
-			if pr.UpdatedAt.Before(since) {
-				log.Printf("Reached PRs older than %s, stopping", since.Format("2006-01-02"))
-				goto done
-			}
-
-			prCount++
-			prNum := pr.GetNumber()
-
-			// Check if any AI bot reviewed this PR
-			reviews, _, err := client.PullRequests.ListReviews(ctx, owner, repo, prNum, nil)
-			if err != nil {
-				log.Printf("Warning: failed to get reviews for PR #%d: %v", prNum, err)
-				continue
-			}
-
-			hasCodeRabbit := crAnalyzer.CheckReview(reviews)
-			hasSourcery := srcAnalyzer.CheckReview(reviews)
-
-			// If no AI bot reviewed this PR, skip detailed analysis
-			if !hasCodeRabbit && !hasSourcery {
-				continue
-			}
-
-			log.Printf("PR #%d has AI reviews (CodeRabbit: %v, Sourcery: %v)", prNum, hasCodeRabbit, hasSourcery)
-
-			// Analyze CodeRabbit comments
-			if hasCodeRabbit {
-				crAnalyzer.MarkPRReviewed(prNum)
-				if err := crAnalyzer.AnalyzeComments(ctx, prNum); err != nil {
-					log.Printf("Warning: failed to analyze CodeRabbit comments for PR #%d: %v", prNum, err)
-				}
-				if err := crAnalyzer.AnalyzeIssueComments(ctx, prNum); err != nil {
-					log.Printf("Warning: failed to analyze CodeRabbit issue comments for PR #%d: %v", prNum, err)
-				}
-				if err := crAnalyzer.AnalyzeThreadsWithLLM(ctx, prNum); err != nil {
-					log.Printf("Warning: failed to analyze CodeRabbit threads with LLM for PR #%d: %v", prNum, err)
-				}
-			}
-
-			// Analyze Sourcery comments
-			if hasSourcery {
-				srcAnalyzer.MarkPRReviewed(prNum)
-				if err := srcAnalyzer.AnalyzeComments(ctx, prNum); err != nil {
-					log.Printf("Warning: failed to analyze Sourcery comments for PR #%d: %v", prNum, err)
-				}
-				if err := srcAnalyzer.AnalyzeIssueComments(ctx, prNum); err != nil {
-					log.Printf("Warning: failed to analyze Sourcery issue comments for PR #%d: %v", prNum, err)
-				}
-				if err := srcAnalyzer.AnalyzeThreadsWithLLM(ctx, prNum); err != nil {
-					log.Printf("Warning: failed to analyze Sourcery threads with LLM for PR #%d: %v", prNum, err)
-				}
-			}
-		}
-
-		if resp.NextPage == 0 {
-			break
-		}
-		opts.Page = resp.NextPage
-	}
-
-done:
-	log.Printf("Analyzed %d PRs total", prCount)
-
-	// Build results array (only include tools that reviewed at least one PR)
-	var results []any
-	if crAnalyzer.HasReviews() {
-		results = append(results, crAnalyzer.GetResult())
-	}
-	if srcAnalyzer.HasReviews() {
-		results = append(results, srcAnalyzer.GetResult())
-	}
-
-	// If no AI tools found, return empty array
-	if results == nil {
-		results = []any{}
-	}
-
-	return results, nil
 }

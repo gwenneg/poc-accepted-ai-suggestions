@@ -21,7 +21,7 @@ export GITHUB_TOKEN=your_github_token
 export MODEL_API=https://your-claude-endpoint.example.com
 export MODEL_USER_KEY=your_api_key
 
-./ai-review-analyzer https://github.com/owner/repo
+./ai-review-analyzer owner/repo
 ```
 
 ### Environment Variables
@@ -39,24 +39,33 @@ The tool outputs a JSON array to stdout with analysis results for each AI review
 ```json
 [
   {
-    "tool": "sourcery",
-    "bot_username": "sourcery-ai[bot]",
-    "prs_reviewed": 34,
-    "total_comments": 50,
-    "bot_resolved_comments": 0,
-    "thumbs_up": 4,
-    "thumbs_down": 3,
-    "avg_llm_score": 68.5,
-    "details": [
+    "ai_review_tool": "coderabbit",
+    "bot_username": "coderabbitai[bot]",
+    "total_prs": 5,
+    "ai_suggestion_threads": 23,
+    "accepted_suggestions": 8,
+    "auto_resolved_by_user": 10,
+    "rejected_comments": 5,
+    "critical_bugs_fixed": 2,
+    "thumbs_up": 8,
+    "thumbs_down": 2,
+    "avg_developer_feedback_score": 7,
+    "prs": [
       {
-        "pr_number": 123,
-        "comments": 5,
-        "thumbs_up": 2,
-        "thumbs_down": 1,
-        "thread_analyses": [
+        "url": "https://github.com/owner/repo/pull/101",
+        "author": "dev_user",
+        "metrics": {
+          "ai_suggestion_threads": 12,
+          "accepted_suggestions": 4,
+          "auto_resolved_by_user": 6,
+          "rejected_comments": 2,
+          "critical_bugs_fixed": 1,
+          "avg_developer_feedback_score": 7
+        },
+        "developer_feedback_analyses": [
           {
-            "score": 75,
-            "summary": "User agreed with the suggestion and applied the fix."
+            "developer_feedback_score": 7,
+            "summary": "Developer accepted the suggestion and applied the fix."
           }
         ]
       }
@@ -71,13 +80,13 @@ Progress logs are written to stderr.
 
 ```bash
 # Analyze a repository
-./ai-review-analyzer https://github.com/RedHatInsights/notifications-backend
+./ai-review-analyzer RedHatInsights/notifications-backend
 
 # Save output to file
-./ai-review-analyzer https://github.com/owner/repo > results.json
+./ai-review-analyzer owner/repo > results.json
 
 # Suppress progress logs
-./ai-review-analyzer https://github.com/owner/repo 2>/dev/null
+./ai-review-analyzer owner/repo 2>/dev/null
 ```
 
 ## Supported AI Review Tools
@@ -86,6 +95,18 @@ Progress logs are written to stderr.
 |------|--------------|--------|
 | CodeRabbit | `coderabbitai[bot]` | Supported |
 | Sourcery.ai | `sourcery-ai[bot]` | Supported |
+
+## Metrics
+
+| Metric | Description |
+|--------|-------------|
+| `ai_suggestion_threads` | Number of review threads started by the AI bot |
+| `accepted_suggestions` | Suggestions applied via "Apply Suggestion" button |
+| `auto_resolved_by_user` | Issues fixed manually by the developer |
+| `rejected_comments` | Unresolved threads on merged PRs |
+| `critical_bugs_fixed` | Resolved threads with critical severity (marked with red emoji) |
+| `thumbs_up` / `thumbs_down` | Reaction counts on bot comments |
+| `developer_feedback_score` | LLM-analyzed score (0-10) based on user discussion |
 
 ## Scope
 
